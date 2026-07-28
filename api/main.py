@@ -72,12 +72,14 @@ def get_artifacts():
     _cache["data"] = data
 
     print("Loading GNN embeddings...")
-    embeddings = torch.load(EMBEDDINGS_PATH, weights_only=True).numpy()
-    _cache["embeddings"] = embeddings
+    # torch.no_grad() — disables gradient tracking for inference (saves memory & CPU)
+    with torch.no_grad():
+        embeddings = torch.load(EMBEDDINGS_PATH, weights_only=True)
+        _cache["embeddings"] = embeddings.numpy()
 
-    is_fraud    = data.edge_attr[:, 3].bool()
-    fraud_edges = data.edge_index[:, is_fraud]
-    fraud_nodes = torch.cat([fraud_edges[0], fraud_edges[1]]).unique().numpy()
+        is_fraud    = data.edge_attr[:, 3].bool()
+        fraud_edges = data.edge_index[:, is_fraud]
+        fraud_nodes = torch.cat([fraud_edges[0], fraud_edges[1]]).unique().numpy()
     _cache["known_fraud_set"] = set(fraud_nodes.tolist())
 
     print("Running MiniBatchKMeans (500 clusters)...")
