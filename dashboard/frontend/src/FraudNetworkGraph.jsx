@@ -22,8 +22,16 @@ export default function FraudNetworkGraph({ graphData, width, height = 420 }) {
   const graphRef = useRef()
 
   useEffect(() => {
+    // Force a fresh simulation on every new dataset — prevents grey overlapped tangles
+    // when replacing one CSV with another (old node positions/links retained otherwise)
     if (graphRef.current) {
-      graphRef.current.d3Force('charge').strength(-180)
+      const fg = graphRef.current
+      fg.d3Force('charge').strength(-180)
+      fg.d3Force('link').distance(50)
+      fg.d3ReheatSimulation()
+      // Re-center after layout stabilises
+      const t = setTimeout(() => fg.zoomToFit(400, 40), 600)
+      return () => clearTimeout(t)
     }
   }, [graphData])
 

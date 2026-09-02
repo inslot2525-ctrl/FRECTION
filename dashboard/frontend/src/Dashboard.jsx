@@ -34,12 +34,17 @@ export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [graphData, setGraphData] = useState(null)
   const [error, setError] = useState(null)
+  const [graphKey, setGraphKey] = useState(0)
 
-  // Handle file selection
+  // Handle file selection — immediately clear previous results so no grey overlay remains
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
       setFile(e.target.files[0])
       setError(null)
+      // Clear previous graph/metrics instantly — prevents grey overlapped view on replace
+      setStats(null)
+      setGraphData(null)
+      setGraphKey((k) => k + 1)
     }
   }
 
@@ -71,6 +76,7 @@ export default function Dashboard() {
       const data = await res.json()
       setStats(data.metrics)
       setGraphData(data.graph_data)
+      setGraphKey((k) => k + 1)
       setStatusMessage('')
     } catch (err) {
       setError(err.message || 'Cannot reach the GNN backend server.')
@@ -180,7 +186,7 @@ export default function Dashboard() {
 
           <div className="rounded-xl overflow-hidden bg-black/40 border border-white/5 flex items-center justify-center min-h-[400px]">
             {graphData ? (
-              <FraudNetworkGraph graphData={graphData} />
+              <FraudNetworkGraph key={graphKey} graphData={graphData} />
             ) : (
               <div className="text-center p-8 space-y-2">
                 {uploading ? (
