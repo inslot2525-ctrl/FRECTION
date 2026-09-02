@@ -241,7 +241,7 @@ async def analyze_dataset(file: UploadFile = File(...)):
         )
 
     has_fraud = fraud_col is not None and fraud_col in df.columns
-    print(f"Columns → sender:'{sender_col}' receiver:'{receiver_col}' amount:'{amount_col}' fraud:'{fraud_col}'")
+    print(f"Columns -> sender:'{sender_col}' receiver:'{receiver_col}' amount:'{amount_col}' fraud:'{fraud_col}'")
 
     rename_map = {sender_col: "nameOrig", receiver_col: "nameDest"}
     if amount_col: rename_map[amount_col] = "amount"
@@ -296,7 +296,7 @@ async def analyze_dataset(file: UploadFile = File(...)):
         if nid not in structural_mules:
             structural_frauds.add(nid)
 
-    print(f"🔍 Structural → {len(structural_frauds)} fraud actors, {len(structural_mules)} mules")
+    print(f"Structural -> {len(structural_frauds)} fraud actors, {len(structural_mules)} mules")
 
     def classify_node(nid: str) -> str:
         if nid in structural_frauds: return "fraud"
@@ -326,7 +326,7 @@ async def analyze_dataset(file: UploadFile = File(...)):
                 ai_predictions[nid] = classify_node(nid)
 
     except Exception as exc:
-        print(f"⚠️  GNN artifacts unavailable ({exc}), using structural analysis only.")
+        print(f"WARNING: GNN artifacts unavailable ({exc}), using structural analysis only.")
         for nid in all_csv_nodes:
             ai_predictions[nid] = classify_node(nid)
 
@@ -338,7 +338,7 @@ async def analyze_dataset(file: UploadFile = File(...)):
     total_fraudsters = sum(1 for n in all_unique_nodes if ai_predictions.get(n) == "fraud")
     total_mules      = sum(1 for n in all_unique_nodes if ai_predictions.get(n) == "mule")
 
-    print(f"🛑 DEBUG: Total nodes: {len(all_unique_nodes)} | Fraudsters: {total_fraudsters} | Mules: {total_mules}")
+    print(f"DEBUG: Total nodes: {len(all_unique_nodes)} | Fraudsters: {total_fraudsters} | Mules: {total_mules}")
 
     fraud_node_ids = {n for n, g in ai_predictions.items() if g in ("fraud", "mule")}
 
