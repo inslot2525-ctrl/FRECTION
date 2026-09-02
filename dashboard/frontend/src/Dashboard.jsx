@@ -177,10 +177,17 @@ export default function Dashboard() {
 
         {/* Main Graph Dynamic Container */}
         <div className="bg-white/5 border border-white/10 backdrop-blur-md rounded-2xl p-6">
-          <h2 className="text-xl font-medium mb-1">2. Network Topology & Risk Clusters</h2>
+          <div className="flex items-start justify-between gap-4 mb-1">
+            <h2 className="text-xl font-medium">2. Network Topology & Risk Clusters</h2>
+            {graphData && (
+              <span className="shrink-0 inline-flex items-center gap-1.5 text-[11px] font-medium tracking-wide text-cyan-300 border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 rounded-full">
+                <Search size={12} className="text-cyan-400" /> Zoom in to see
+              </span>
+            )}
+          </div>
           <p className="text-gray-400 text-xs mb-4">
             {graphData
-              ? 'Interactive WebGL visualization generated from GNN node embeddings.'
+              ? 'Interactive WebGL visualization generated from GNN node embeddings. • Scroll to zoom • Drag to pan'
               : 'Graph network structure will automatically generate here once a dataset has completed scanning.'}
           </p>
 
