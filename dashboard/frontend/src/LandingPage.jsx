@@ -38,7 +38,7 @@ export default function LandingPage() {
         <AnoAI />
       </div>
 
-      <div className="relative z-10 min-h-screen bg-black/50 backdrop-blur-sm">
+      <div className="relative z-10 min-h-screen bg-black/50">
 
         {/* ── HEADER ── */}
         <header className="flex justify-between items-center px-8 py-6 border-b border-white/10">
@@ -84,7 +84,7 @@ export default function LandingPage() {
           </button>
 
           <p className="text-gray-500 text-xs pt-2">
-            No account needed · Works with any transaction CSV · Results in seconds
+            No account needed · Works with transaction ledgers or customer tables · Results in seconds
           </p>
         </section>
 
@@ -167,7 +167,7 @@ export default function LandingPage() {
             <FeatureCard
               icon={<Shield size={20} />}
               title="Any CSV format"
-              desc="Fuzzy column matching handles any naming convention — sender, nameOrig, from, source, payer and more."
+              desc="Transaction ledgers or one-row-per-customer tables. Columns, delimiters, encodings, currencies and Yes/No labels are understood automatically — and you can adjust them."
             />
           </div>
         </section>

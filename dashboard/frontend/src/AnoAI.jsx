@@ -12,18 +12,26 @@ const AnoAI = () => {
 
     const scene = new THREE.Scene();
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-    
-    // Ensure the renderer fills the screen
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(window.devicePixelRatio);
-    
+    // A full-screen shader has no geometry edges, so antialiasing only costs GPU time.
+    const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true, powerPreference: 'low-power' });
+
+    // The aurora is a soft glow, so rendering it at reduced resolution is visually
+    // identical but far cheaper (the shader runs a 35-step loop for every pixel).
+    const RENDER_SCALE = 0.5;
+    const resolution = new THREE.Vector2();
+    const applySize = () => {
+      renderer.setPixelRatio(RENDER_SCALE);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.getDrawingBufferSize(resolution);
+    };
+    applySize();
+
     container.appendChild(renderer.domElement);
 
     const material = new THREE.ShaderMaterial({
       uniforms: {
         iTime: { value: 0 },
-        iResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
+        iResolution: { value: resolution }
       },
       vertexShader: `
         void main() {
@@ -97,23 +105,43 @@ const AnoAI = () => {
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
 
-    let frameId;
-    const animate = () => {
-      material.uniforms.iTime.value += 0.016;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    let frameId = null;
+    let last = performance.now();
+    const animate = (now = performance.now()) => {
+      // Advance by real elapsed time (same speed as before at 60 fps, but not
+      // faster on 120/144 Hz screens); clamp so a paused tab doesn't jump ahead.
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      material.uniforms.iTime.value += dt * 0.96;
       renderer.render(scene, camera);
-      frameId = requestAnimationFrame(animate);
+      frameId = reducedMotion ? null : requestAnimationFrame(animate);
     };
     animate();
 
+    // Stop rendering entirely while the tab is hidden
+    const handleVisibility = () => {
+      if (document.hidden) {
+        if (frameId !== null) cancelAnimationFrame(frameId);
+        frameId = null;
+      } else if (frameId === null && !reducedMotion) {
+        last = performance.now();
+        frameId = requestAnimationFrame(animate);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
     const handleResize = () => {
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      material.uniforms.iResolution.value.set(window.innerWidth, window.innerHeight);
+      applySize();
+      if (reducedMotion) renderer.render(scene, camera);
     };
     window.addEventListener('resize', handleResize);
 
     // Cleanup function
     return () => {
-      cancelAnimationFrame(frameId);
+      if (frameId !== null) cancelAnimationFrame(frameId);
+      document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('resize', handleResize);
       
       // 2. SAFE REMOVAL: Only remove if the container and canvas both still exist

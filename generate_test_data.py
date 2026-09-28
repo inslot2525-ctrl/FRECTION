@@ -15,7 +15,12 @@ Output file:  test_ledger_small.csv
 """
 
 import random
+import sys
 import pandas as pd
+
+# Windows consoles default to cp1252, which can't print the emoji below
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 random.seed(42)  # Fixed seed → reproducible counts every run
 

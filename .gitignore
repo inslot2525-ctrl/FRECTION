@@ -171,3 +171,9 @@ cython_debug/
 
 # Processed data directory
 data/processed/
+
+# Bundled demo dataset for the dashboard's "Try sample data" button
+!dashboard/frontend/public/sample_ledger.csv
+
+# Local cache written by the API
+data/processed/cluster_labels_cache.npz
