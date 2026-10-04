@@ -152,7 +152,7 @@ export default function LandingPage() {
             <FeatureCard
               icon={<GitBranch size={20} />}
               title="Layering & cash-out"
-              desc="Shell companies and offshore accounts at the end of the chain are flagged via name patterns and graph position."
+              desc="Shell companies and offshore accounts at the end of the chain are found by following the money downstream from a mule hub."
             />
             <FeatureCard
               icon={<Eye size={20} />}

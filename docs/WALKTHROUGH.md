@@ -79,35 +79,51 @@ file's size and modification time, so a restart doesn't redo the clustering.
 once with `pd.factorize`. All later logic runs on integer arrays, which is what
 makes 100,000 rows take under 200 ms.
 
-The labelling rules, in priority order:
+The labelling rules use labels where they exist and graph structure otherwise.
+Nothing is matched on account names.
 
-1. account name contains `FRAUD` → fraud
-2. account name contains `MULE`, `OFFSHORE` or `SHELL` → mule
-3. sent a transaction labelled fraud → fraud
-4. received a transaction labelled fraud → mule
-5. **fan-in rule**: received from many distinct senders (at least 0.5 % of all
-   accounts, minimum 2) while sending to at most 3 → mule
-6. cascade: anything a mule pays is also a mule
-7. cascade: anything that pays a mule is a fraud actor
+1. sent a transaction labelled fraud → fraud
+2. received a transaction labelled fraud → mule
+3. **collection hub** → mule. An account is a hub when
+   - it receives from many distinct accounts (0.5 % of all accounts, never
+     fewer than 3, and 50 is always enough),
+   - it forwards to between 1 and 3 accounts, so pure sinks such as shops are
+     excluded, and
+   - most of its senders are *feeders*: accounts that themselves receive money
+     and send most of what they send into the hub. "Most" is measured in money
+     when an amount column exists, otherwise in counterparties.
+4. **layering** → mule: an account most of whose senders are mules. This is
+   repeated for up to 4 hops, which follows hub → shell → offshore.
+5. **fraud actor**: a feeder of a confirmed hub.
+
+The third hub condition is what separates a mule hub from a landlord or a
+business. A landlord also collects from many and pays few, but the tenants spend
+most of their money elsewhere, so they are not feeders.
 
 If the trained GNN artifacts are present, accounts that appear in the training
 graph take their label from there instead: known fraud stays fraud, and an
 account in an embedding cluster where more than 10 % of members are known fraud
 is a mule.
 
-**Why this way.** The rules encode the textbook shape of a laundering ring:
-many victims pay fraud actors, who pay a collection hub, which pays a shell
-company, which pays offshore.
+**How well the rules do.** `tests/rule_benchmark.py` scores them on synthetic
+ledgers with known ground truth (see `reports/rule_benchmark.md`). On the
+"messy" set, which has neutral account names, shops, landlords, franchise
+outlets and fraud actors who also spend at shops, precision is 100 % and recall
+96 %.
 
 **Limits — be clear about these.**
 
+- The scores above are on synthetic data built from the same idea of a ring as
+  the rules. They show the rules do what they were designed to do. They say
+  nothing about real bank data.
+- A ring with no fraud-actor layer, where victims pay the hub directly, is
+  missed: structurally it is the same as a legitimate collector.
+- Anyone who feeds a hub is called a fraud actor. A victim who sends all their
+  money through an intermediary would be mislabelled.
+- The thresholds (0.5 %, 3, 50, "most" = half, 4 hops) are chosen by hand, not
+  learned.
 - The GNN is a **lookup of accounts seen in training**. It does not run on
   newly uploaded accounts. On a new dataset the verdicts come from the rules.
-- Rules 1 and 2 match account *names*. They work on the synthetic demo data and
-  would do nothing on real data.
-- The fan-in rule flags any popular receiver, including ordinary shops, and the
-  cascade then flags everyone who paid them. On the bundled sample this reports
-  878 fraud accounts where 150 are planted.
 - Only the first 600 flagged and 200 normal transactions are drawn.
 
 ### `api/entities.py` — customer-records mode

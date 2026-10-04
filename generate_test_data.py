@@ -4,7 +4,7 @@ generate_test_data.py
 Generates a small, deterministic test CSV with KNOWN expected counts.
 
 Expected results after upload:
-  - Total Accounts Scanned : 1,643  (approx — varies slightly with random victims)
+  - Total Accounts Scanned : ~1,315
   - Transactions Processed : 2,800+ (approx)
   - Known Malicious Hubs   : 150    (3 rings × 50 fraudsters)
   - Newly Identified Mules : 9      (3 mule hubs + 3 offshore + 3 shell accounts)

@@ -60,6 +60,14 @@ MAX_ROWS          = 100_000
 MULE_RATIO_THRESH = 0.1
 NONE_COLUMN       = "__none__"   # sent by the UI when the user picks "no column"
 
+# Transaction rules (see _analyze_transactions)
+HUB_FAN_IN_SHARE = 0.005   # a hub receives from at least this share of all accounts...
+HUB_FAN_IN_MIN   = 3       # ...but never fewer than this many distinct senders
+HUB_FAN_IN_MAX   = 50      # ...and on large files 50 distinct senders is always enough
+HUB_MAX_FAN_OUT  = 3       # a hub forwards to at most this many accounts
+MAJORITY         = 0.5     # "most of": share of counterparties
+LAYERING_HOPS    = 4       # how far downstream of a mule the money trail is followed
+
 # ---------------------------------------------------------------------------
 # Artifact cache  (loaded once, in the background, at startup)
 # ---------------------------------------------------------------------------
@@ -328,30 +336,64 @@ def _analyze_transactions(df: pd.DataFrame, sender_col, receiver_col, fraud_col,
     is_fs = flag(sc[fraud_row & s_ok])
     is_fr = flag(dc[fraud_row & d_ok])
 
-    # Unique in/out neighbours per account
+    if amount_col and amount_col in df.columns:
+        amt = df[amount_col]
+        amounts = (parse_numeric_text(amt) if is_text(amt) else pd.to_numeric(amt, errors="coerce")).to_numpy(dtype=float)
+    else:
+        amounts = None
+
+    # Unique sender → receiver pairs, and how many distinct counterparties each account has
     pair_ids = np.unique(sc[both_ok].astype(np.int64) * n_nodes + dc[both_ok])
-    fan_in   = np.bincount(pair_ids % n_nodes, minlength=n_nodes)
-    fan_out  = np.bincount(pair_ids // n_nodes, minlength=n_nodes)
+    pair_s, pair_d = pair_ids // n_nodes, pair_ids % n_nodes
+    fan_in   = np.bincount(pair_d, minlength=n_nodes)
+    fan_out  = np.bincount(pair_s, minlength=n_nodes)
 
-    total_nodes        = max(n_nodes, 1)
-    mule_fan_in_thresh = max(2, total_nodes * 0.005)
-    fan_rule           = (fan_in >= mule_fan_in_thresh) & (fan_out <= 3)
+    def count_out(to_mask):   # per account: distinct receivers it pays that are in `to_mask`
+        return np.bincount(pair_s[to_mask[pair_d]], minlength=n_nodes)
 
-    upper     = nodes.str.upper()
-    name_frd  = np.asarray(upper.str.contains("FRAUD", regex=False), dtype=bool)
-    name_mule = np.asarray(upper.str.contains("MULE|OFFSHORE|SHELL", regex=True), dtype=bool)
+    def count_in(from_mask):  # per account: distinct senders paying it that are in `from_mask`
+        return np.bincount(pair_d[from_mask[pair_s]], minlength=n_nodes)
 
-    # Priority: FRAUD in name > MULE/OFFSHORE/SHELL in name > fraud sender > fraud receiver > fan-in rule
-    struct_fraud = name_frd | (~name_mule & is_fs)
-    struct_mule  = ~name_frd & (name_mule | (~is_fs & (is_fr | fan_rule)))
+    # --- Collection hub -------------------------------------------------------
+    # Candidate: money arrives from many accounts and is forwarded to a few.
+    # fan_out >= 1 rules out pure sinks (shops, billers) that never pass money on.
+    hub_thresh = float(np.clip(n_nodes * HUB_FAN_IN_SHARE, HUB_FAN_IN_MIN, HUB_FAN_IN_MAX))
+    candidate  = (fan_in >= hub_thresh) & (fan_out >= 1) & (fan_out <= HUB_MAX_FAN_OUT)
 
+    # A feeder is itself a pass-through (it receives money) that sends most of what
+    # it sends into such a hub. Ordinary customers paying a landlord or a popular
+    # account don't qualify: they spend at many other places too.
+    # "Most" is measured in money when amounts are available (a fraud actor may
+    # also buy groceries), otherwise in counterparties.
+    if amounts is not None:
+        paid = np.where(both_ok, np.nan_to_num(np.abs(amounts)), 0.0)
+        sent_total  = np.bincount(sc[both_ok], weights=paid[both_ok], minlength=n_nodes)
+        to_hub_rows = both_ok & candidate[dc]
+        sent_to_hub = np.bincount(sc[to_hub_rows], weights=paid[to_hub_rows], minlength=n_nodes)
+        mostly_to_hub = (sent_to_hub > 0) & (sent_to_hub >= MAJORITY * sent_total)
+    else:
+        mostly_to_hub = (count_out(candidate) > 0) & (count_out(candidate) >= MAJORITY * fan_out)
+    feeder_like = (fan_in >= 1) & mostly_to_hub
+
+    # Confirmed hub: most of its senders are feeders. This is what separates a
+    # mule hub from a legitimate collector.
+    hub = candidate & (count_in(feeder_like) >= MAJORITY * fan_in)
+
+    # Priority: fraud sender (label) > fraud receiver (label) > structure
+    struct_fraud = is_fs.copy()
+    struct_mule  = ~is_fs & (is_fr | hub)
     base_fraud, base_mule = struct_fraud.copy(), struct_mule.copy()
 
-    # Cascade: who does the mule send to → also mule
-    struct_mule |= flag(dc[both_ok & struct_mule[sc]])
+    # --- Layering: accounts funded mainly by mules (hub → shell → offshore) ------
+    for _ in range(LAYERING_HOPS):
+        from_mules = count_in(struct_mule)
+        layered = ~struct_mule & ~struct_fraud & (from_mules > 0) & (from_mules >= MAJORITY * fan_in)
+        if not layered.any():
+            break
+        struct_mule |= layered
 
-    # Cascade: who sends to a mule → fraud actor
-    struct_fraud |= flag(sc[both_ok & struct_mule[dc]]) & ~struct_mule
+    # --- Fraud actors: the pass-through accounts feeding a confirmed hub ---------
+    struct_fraud |= feeder_like & (count_out(hub) > 0) & ~struct_mule
 
     print(f"Structural -> {int(struct_fraud.sum())} fraud actors, {int(struct_mule.sum())} mules")
 
@@ -397,17 +439,12 @@ def _analyze_transactions(df: pd.DataFrame, sender_col, receiver_col, fraud_col,
         "known_fraudsters": total_fraudsters,
         "suspected_mules":  total_mules,
     }
-    if amount_col and amount_col in df.columns:
-        amt = df[amount_col]
-        amounts = (parse_numeric_text(amt) if is_text(amt) else pd.to_numeric(amt, errors="coerce")).to_numpy(dtype=float)
-    else:
-        amounts = None
-
     evidence = {
         "nodes": nodes, "groups": groups, "sc": sc, "dc": dc, "fraud_row": fraud_row,
         "has_label": has_fraud, "amounts": amounts,
-        "name_frd": name_frd, "name_mule": name_mule, "is_fs": is_fs, "is_fr": is_fr,
-        "fan_in": fan_in, "fan_out": fan_out, "fan_thresh": mule_fan_in_thresh, "fan_rule": fan_rule,
+        "is_fs": is_fs, "is_fr": is_fr, "hub": hub, "candidate_hub": candidate,
+        "fan_in": fan_in, "fan_out": fan_out, "fan_thresh": hub_thresh,
+        "pair_s": pair_s, "pair_d": pair_d,
         "base_fraud": base_fraud, "base_mule": base_mule,
         "struct_fraud": struct_fraud, "struct_mule": struct_mule, "gnn_pos": gnn_pos,
     }

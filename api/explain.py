@@ -167,13 +167,6 @@ def _explain_transaction(entry, i, artifacts):
     receivers = dc[rows_out][dc[rows_out] >= 0]
 
     reasons = []   # (title, detail, kind)  kind: fraud | mule | info
-    upper = acct.upper()
-    if ev["name_frd"][i]:
-        reasons.append(("Account name says FRAUD", f'The account ID "{acct}" contains the word FRAUD.', "fraud"))
-    if ev["name_mule"][i]:
-        word = next(w for w in ("MULE", "OFFSHORE", "SHELL") if w in upper)
-        reasons.append((f"Account name suggests a {word.lower()} account",
-                        f'The account ID contains "{word}", a pattern used for mule, offshore and shell-company accounts.', "mule"))
     if ev["is_fs"][i]:
         reasons.append(("Sent fraud-labelled transactions",
                         f"{fraud_out} of its {len(rows_out)} outgoing transactions are marked as fraud in the '{label_col}' column.", "fraud"))
@@ -181,21 +174,37 @@ def _explain_transaction(entry, i, artifacts):
         reasons.append(("Received fraud-labelled transactions",
                         f"{fraud_in} of its {len(rows_in)} incoming transactions are marked as fraud in the '{label_col}' column — "
                         "the account is on the receiving end of fraud, typical of a mule.", "mule"))
-    if ev["fan_rule"][i]:
-        reasons.append(("Collection-hub pattern (fan-in)",
-                        f"Received money from {int(ev['fan_in'][i])} different senders (the threshold for this file is "
-                        f"{ev['fan_thresh']:.0f}) but sends to only {int(ev['fan_out'][i])} account(s). Many-in / few-out is how "
-                        "mule accounts consolidate stolen funds.", "mule"))
+
+    unique_senders = np.unique(senders)
+    if ev["hub"][i]:
+        feeders = int(ev["struct_fraud"][unique_senders].sum())
+        reasons.append(("Collection hub",
+                        f"Receives from {int(ev['fan_in'][i])} different accounts (threshold for this file: "
+                        f"{ev['fan_thresh']:.0f}) and forwards to only {int(ev['fan_out'][i])}. {feeders} of those senders are "
+                        "pass-through accounts that send it most of their money — the pattern of a mule hub consolidating "
+                        "funds, not of a shop or landlord whose customers also spend elsewhere.", "mule"))
+    elif ev["candidate_hub"][i] and not ev["struct_mule"][i]:
+        reasons.append(("Collects from many, but not flagged",
+                        f"Receives from {int(ev['fan_in'][i])} accounts and forwards to {int(ev['fan_out'][i])}, which looks "
+                        "like a hub. Its senders spend most of their money elsewhere, though, so it is treated as a "
+                        "legitimate collector (for example a business).", "info"))
     if ev["struct_mule"][i] and not ev["base_mule"][i]:
-        upstream = np.unique(senders[ev["base_mule"][senders]])
-        reasons.append(("Receives money from a mule",
-                        f"Gets funds from mule account(s) {_names(ev['nodes'][upstream])}, so it is the next hop in the "
-                        "laundering chain (layering / cash-out).", "mule"))
+        upstream = unique_senders[ev["struct_mule"][unique_senders]]
+        reasons.append(("Funded mainly by mule accounts",
+                        f"{len(upstream)} of its {len(unique_senders)} sender(s) are mules ({_names(ev['nodes'][upstream])}), "
+                        "so it is the next hop in the laundering chain (layering / cash-out).", "mule"))
     if ev["struct_fraud"][i] and not ev["base_fraud"][i]:
-        downstream = np.unique(receivers[ev["struct_mule"][receivers]])
-        reasons.append(("Feeds money into a mule",
-                        f"Sends funds to mule account(s) {_names(ev['nodes'][downstream])}. Accounts that pay into a mule hub "
-                        "are treated as the fraud actors supplying the ring.", "fraud"))
+        hubs = np.unique(receivers[ev["hub"][receivers]])
+        share = ""
+        if ev["amounts"] is not None:
+            sent = np.nan_to_num(ev["amounts"][rows_out])
+            to_hub = sent[ev["hub"][dc[rows_out]]].sum()
+            if sent.sum() > 0:
+                share = f" ({to_hub / sent.sum():.0%} of everything it sent)"
+        reasons.append(("Feeds a collection hub",
+                        f"Receives money from {int(ev['fan_in'][i])} account(s) and passes most of it on to hub "
+                        f"{_names(ev['nodes'][hubs])}{share}. Pass-through accounts that supply a hub are treated as the "
+                        "fraud actors of the ring.", "fraud"))
 
     gnn = _gnn_reason(i, ev, artifacts)
     structural = "fraud" if ev["struct_fraud"][i] else "mule" if ev["struct_mule"][i] else "normal"
@@ -213,8 +222,8 @@ def _explain_transaction(entry, i, artifacts):
         summary = (f"{acct} is not flagged. The graph rules alone would mark it as '{structural}', but the trained GNN "
                    "knows this account and classifies its behaviour as normal, so the GNN verdict is used.")
     elif group == "normal":
-        summary = (f"{acct} is not flagged. None of the fraud signals fired: no fraud-labelled transactions, no suspicious "
-                   f"name, no collection-hub pattern and no money flowing to or from a mule.")
+        summary = (f"{acct} is not flagged. None of the fraud signals fired: no fraud-labelled transactions, it is not "
+                   f"a confirmed collection hub, it does not feed one, and it is not funded mainly by mules.")
         if len(linked_flagged):
             summary += f" It does transact with {len(linked_flagged)} flagged account(s), which may be worth a look."
     else:
