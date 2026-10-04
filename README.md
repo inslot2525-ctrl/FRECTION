@@ -1,397 +1,200 @@
-#  FRECTION - Fraud Ring Detection using Graph Neural Networks, Anomaly Detection and Graph Analytics
+# FRECTION — fraud-ring detection on transaction graphs
 
-## Overview
+FRECTION finds coordinated fraud rings in financial data. Instead of scoring
+each transaction on its own, it models accounts as a graph, flags fraud actors
+and mule accounts from the structure of the money flow, draws the network, and
+explains every verdict.
 
-Fraud Ring Detector is a graph-based financial fraud detection system designed to identify coordinated money laundering and fraudulent account networks rather than individual suspicious transactions.
+Upload a CSV, see the ring, click an account, read why it was flagged.
 
-Unlike traditional machine learning models that classify transactions independently, this system models the complete transaction history as a directed graph where:
+## What it does
 
-- Nodes represent bank accounts
-- Edges represent financial transactions
-- Node embeddings are learned using Graph Neural Networks
-- Anomalous accounts are detected using Isolation Forest
-- Fraud rings are discovered using DBSCAN clustering
+- **Reads almost any CSV.** Columns, delimiter and encoding are detected
+  automatically, and you can correct the detection in the UI.
+- **Handles two kinds of data.**
+  - *Transaction ledgers* (sender → receiver): accounts become nodes, transfers
+    become edges, and rings are found from the shape of the money flow.
+  - *Customer tables* (one row per customer): anomaly detection plus a
+    similarity graph that links each customer to its closest look-alikes.
+- **Explains every verdict.** Click a node, search, or pick a flagged account
+  to see the evidence behind its label and its counterparties.
+- **Optional AI summary.** With an Anthropic API key, Claude writes a short
+  investigator-style summary of that evidence and answers follow-up questions.
+- **Fast.** 100,000 transactions are analysed in well under a second.
 
-The project demonstrates an end-to-end Graph Machine Learning pipeline from raw transaction processing to fraud visualization.
+## Results
 
----
+### Detection rules, against known ground truth
 
-# Problem Statement
+Scored on synthetic ledgers where the true fraud accounts are known
+(`python -m tests.rule_benchmark`).
 
-Traditional fraud detection systems suffer from several limitations:
+| Dataset | Accounts | Truly bad | Flagged | Precision | Recall |
+|---|---|---|---|---|---|
+| Bundled sample | 1,315 | 159 | 159 | 100 % | 100 % |
+| Neutral names, with shops, landlords and employers | 4,701 | 376 | 376 | 100 % | 100 % |
+| Messy: fraud actors who also shop, franchise outlets, rings with no actor layer | 4,563 | 222 | 214 | 100 % | 96 % |
 
-- Detect individual fraudulent transactions but miss organized fraud rings
-- Ignore graph relationships between accounts
-- Fail to identify shell accounts and money laundering chains
-- Depend heavily on labeled fraud data
+An earlier version of the rules flagged nearly every account on these ledgers
+(4–15 % precision). The before/after comparison is in
+[`reports/rule_benchmark.md`](reports/rule_benchmark.md).
 
-This project addresses these issues by representing financial transactions as a graph and learning structural account representations for anomaly detection.
+These ledgers are synthetic and share the rules' own idea of what a ring looks
+like. The table shows the rules do what they were designed to do. It is not
+evidence of performance on real bank data.
 
----
+### Does a graph neural network help? An honest benchmark
 
-# Architecture
+The GraphSAGE encoder in this repo was benchmarked against tabular baselines on
+the [Elliptic Bitcoin dataset](https://www.kaggle.com/datasets/ellipticco/elliptic-data-set)
+(203,769 real transactions, 4,545 labelled illicit).
 
-```
-                  PaySim Dataset
-                  (Transactions)
-                         │
-                         ▼
-              Graph Construction
-          (Sender → Receiver Network)
-                         │
-                         ▼
-             Node Feature Engineering
-                         │
-         ┌───────────────┴───────────────┐
-         ▼                               ▼
-     ANN Encoder                    LSTM Encoder
-         │                               │
-         └───────────────┬───────────────┘
-                         ▼
-                  GraphSAGE Encoder
-                         │
-                  Node Embeddings
-                         │
-                         ▼
-               Isolation Forest
-                         │
-                  Suspicious Accounts
-                         │
-                         ▼
-                     DBSCAN
-                         │
-                         ▼
-              Fraud Ring Identification
-                         │
-                         ▼
-                Interactive Dashboard
-```
+Protocol: temporal split (train on time steps 1–29, validate on 30–34, test on
+35–49), scaling fitted on the training period only, decision threshold chosen on
+validation, three seeds. Scores are for the illicit class on the test period.
 
----
+| Model | Precision | Recall | F1 | PR-AUC |
+|---|---|---|---|---|
+| **Random Forest** | 0.895 | 0.714 | **0.794** | 0.787 |
+| XGBoost | 0.781 | 0.735 | 0.756 | 0.789 |
+| GraphSAGE embeddings + XGBoost | 0.580 | 0.585 | 0.581 | 0.617 |
+| GraphSAGE | 0.571 | 0.569 | 0.569 | 0.518 |
+| MLP (same features, no graph) | 0.488 | 0.480 | 0.482 | 0.314 |
+| Logistic Regression | 0.171 | 0.780 | 0.281 | 0.219 |
 
-# Dataset
+**Finding: the graph model did not beat the tree baselines.** A random forest on
+the tabular features reached 0.79 F1; GraphSAGE reached 0.57. This agrees with
+the dataset authors' own result, where random forest also outperformed a GCN.
+GraphSAGE was run in one configuration and is not tuned.
 
-Dataset:
+![Illicit F1 per test time step](reports/elliptic_f1_over_time.png)
 
-PaySim Mobile Money Simulation Dataset
+Every model collapses after time step 43, when a dark market shut down and the
+pattern of illicit activity changed. A model trained on the past stops working
+when behaviour changes, whether or not it uses the graph.
 
-Source:
+Full tables, including the local-features-only run:
+[`reports/elliptic_results.md`](reports/elliptic_results.md).
+Reproduce with `python -m src.evaluation.evaluate_elliptic --data-dir <elliptic folder>`.
 
-https://www.kaggle.com/datasets/ealaxi/paysim1
-
-Current Prototype Dataset
-
-| Property | Value |
-|----------|---------|
-| Transactions Used | 100,000 |
-| Unique Accounts | 151,551 |
-| Graph Type | Directed |
-| Nodes | 151,551 |
-| Edges | 100,000 |
-
-Future Training
-
-The project is designed to scale to the complete PaySim dataset containing over **6.3 million transactions** using GraphSAGE edge prediction and neighbor sampling.
-
----
-
-# Features Engineered
-
-For every account:
-
-- In-degree
-- Out-degree
-- Total amount sent
-- Total amount received
-- Average outgoing amount
-- Average incoming amount
-- Fraud transaction count
-- Fraud ratio
-
----
-
-# Machine Learning Pipeline
-
-## ANN
-
-Purpose:
-
-Compress engineered account statistics into dense numerical representations.
-
-Input:
+## How it works
 
 ```
-8 engineered features
+CSV upload
+   │
+   ▼
+ingest          detect encoding, delimiter and column roles; clean the table
+   │
+   ├── transactions ──▶ graph rules: collection hubs, feeders, layering
+   │                    (+ lookup in the trained GNN graph, if artifacts exist)
+   │
+   └── customer table ─▶ robust scaling → Isolation Forest → k-NN similarity graph
+   │
+   ▼
+evidence store ──▶ account investigator: rule-by-rule explanation, optional AI summary
+   │
+   ▼
+React dashboard: force-directed network, metrics, column editor
 ```
 
-Output:
+**Transaction rules.** Labels are used where they exist; otherwise the rules use
+graph structure only. Nothing is matched on account names.
 
-```
-16-dimensional embedding
-```
+- A **collection hub** receives from many accounts, forwards to one to three,
+  and is fed mainly by pass-through accounts that send it most of their money.
+  That last condition separates a mule hub from a shop or a landlord.
+- **Layering** follows the money downstream: an account funded mainly by mules
+  is a mule (hub → shell → offshore).
+- **Fraud actors** are the pass-through accounts that feed a confirmed hub.
 
----
+A module-by-module explanation, with the reasoning and limits of each part, is
+in [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md).
 
-## LSTM
+## Quick start
 
-Purpose:
+Requirements: Python 3.10+ and Node.js 20+.
 
-Capture sequential transaction behaviour of each account.
+```bash
+git clone https://github.com/inslot2525-ctrl/FRECTION
+cd FRECTION
 
-Input sequence:
+python -m venv .venv
+.venv\Scripts\activate            # Windows   (macOS/Linux: source .venv/bin/activate)
+pip install -r requirements.txt
 
-```
-[
-Amount,
-Transaction Type,
-Time Step
-]
-```
-
-Sequence Length:
-
-```
-5 transactions
-```
-
----
-
-## Graph Neural Network
-
-Architecture:
-
-GraphSAGE
-
-Input:
-
-- Node Features
-- Graph Connectivity
-
-Output:
-
-```
-16-dimensional graph embedding
+cd dashboard/frontend
+npm install
+cd ../..
 ```
 
-Current implementation performs supervised embedding learning.
+Run it:
 
-Future version will replace this with:
-
-- Edge Prediction
-- Negative Sampling
-- Neighbor Sampling
-
-for production-scale graph learning.
-
----
-
-## Isolation Forest
-
-Purpose:
-
-Detect structurally anomalous accounts.
-
-Configuration:
-
-```
-n_estimators = 100
-contamination = 1%
+```bash
+.\start.ps1                       # Windows: starts backend and frontend
 ```
 
-Output:
+or in two terminals:
 
-Anomaly Score
-
-Higher score indicates higher fraud suspicion.
-
----
-
-## DBSCAN
-
-Purpose:
-
-Group anomalous accounts into coordinated fraud rings.
-
-Configuration:
-
-```
-eps = 0.8
-
-min_samples = 3
+```bash
+uvicorn api.main:app --port 8000
+cd dashboard/frontend && npm run dev
 ```
 
----
+Open http://localhost:5173 and click **Try sample data**.
 
-# Results
+**Optional AI summaries.** Copy `.env.example` to `.env` and add your
+`ANTHROPIC_API_KEY`. Only the evidence for the account you are viewing is sent,
+never the uploaded file. Everything else works without a key.
 
-Current Dataset
-
-| Metric | Value |
-|----------|-----------|
-| Accounts | 151,551 |
-| Transactions | 100,000 |
-| Suspicious Accounts | 1,504 |
-| Fraud Ring Candidates | 3 |
-| Largest Ring Size | 3 Accounts |
-
-Cluster Distribution
+## Project structure
 
 ```
-Noise (-1): 1495
-
-Cluster 0 : 3
-
-Cluster 1 : 3
-
-Cluster 2 : 3
+api/
+  main.py            FastAPI app, transaction rules, endpoints
+  ingest.py          CSV reading, cleaning, column detection
+  entities.py        customer-table mode: Isolation Forest + k-NN graph
+  explain.py         account investigator and optional AI summary
+dashboard/frontend/  React + Vite dashboard
+src/
+  preprocessing/     PaySim → graph tensors
+  models/            GraphSAGE encoder and edge decoder
+  training/          training scripts
+  inference/         embedding extraction and earlier experiments
+  evaluation/        Elliptic benchmark
+tests/               rule benchmark and regression test
+reports/             benchmark results
+docs/WALKTHROUGH.md  how each module works and why
 ```
 
----
+## Limitations
 
-# Training Summary
+- **The GNN does not run on uploaded data.** In the app it is a lookup for
+  accounts that were in the training graph. On a new dataset the verdicts come
+  from the rules. The trained artifacts are not included in this repository.
+- **The PaySim training pipeline has label leakage.** Two of the six node
+  features in `src/preprocessing/node_features.py` are per-account fraud counts.
+  Scores from that pipeline should not be trusted until they are removed.
+- **The rule scores are on synthetic data** and the thresholds are hand-picked.
+- **Rings with no fraud-actor layer are missed.** Victims paying a hub directly
+  look the same as customers paying a business.
+- **Single process, in memory.** Uploads are capped at 100,000 rows and analysis
+  results are lost on restart.
+- `src/` still contains earlier experiments (ANN, LSTM, DBSCAN clustering) that
+  the app does not use.
 
-## ANN
+## Roadmap
 
-```
-Epochs : 10
+- Remove the leaky features and retrain the PaySim model
+- Run GraphSAGE inductively on uploaded data
+- Tune GraphSAGE on Elliptic and try out-of-fold embeddings for the hybrid model
+- Learn the rule thresholds from data
+- Docker setup and a hosted demo
 
-Training Loss
+## Tech stack
 
-82.13
+Python · FastAPI · pandas · NumPy · scikit-learn · XGBoost · PyTorch ·
+PyTorch Geometric · React · Vite · Tailwind CSS · react-force-graph · three.js
 
-↓
+## License
 
-24.08
-```
-
----
-
-## GraphSAGE
-
-```
-Epochs : 20
-
-Training Loss
-
-1799
-
-↓
-
-0.0002
-```
-
-Current GraphSAGE implementation serves as a proof-of-concept encoder.
-
-Future versions will use edge prediction on the complete 6.3M transaction dataset.
-
----
-
-# Dashboard
-
-The Streamlit dashboard provides
-
-- Fraud overview statistics
-- Suspicious account table
-- Fraud ring summary
-- Cluster information
-
----
-
-# Technology Stack
-
-Python
-
-PyTorch
-
-PyTorch Geometric
-
-NetworkX
-
-Pandas
-
-NumPy
-
-Scikit-learn
-
-Isolation Forest
-
-DBSCAN
-
-Streamlit
-
-Plotly
-
----
-
-# Project Structure
-
-```
-fraud-ring-detector/
-
-│
-
-├── data/
-
-│ ├── raw/
-
-│ └── processed/
-
-│
-
-├── src/
-
-│ ├── preprocessing/
-
-│ ├── models/
-
-│ ├── training/
-
-│ └── inference/
-
-│
-
-├── dashboard/
-
-│ └── app.py
-
-│
-
-└── README.md
-```
-
----
-
-# Future Improvements
-
-- GraphSAGE Edge Prediction
-- Neighbor Sampling
-- Full 6.3 Million Transaction Training
-- Graph Contrastive Learning (GraphCL)
-- SHAP Explainability
-- XGBoost Risk Scoring
-- Temporal Graph Neural Networks
-- Neo4j Integration
-- REST API Deployment
-- Docker Support
-
----
-
-# Skills Demonstrated
-
-- Graph Machine Learning
-- Fraud Analytics
-- Graph Construction
-- Network Analysis
-- Deep Learning
-- Graph Neural Networks
-- Unsupervised Learning
-- Anomaly Detection
-- Feature Engineering
-- Financial Risk Modelling
-- Dashboard Development
-
----
-
-# License
-
-MIT License
+MIT
