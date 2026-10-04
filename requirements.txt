@@ -13,3 +13,4 @@ streamlit
 torch
 python-multipart
 anthropic
+torch_geometric

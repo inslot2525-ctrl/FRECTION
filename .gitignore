@@ -177,3 +177,12 @@ data/processed/
 
 # Local cache written by the API
 data/processed/cluster_labels_cache.npz
+
+# Node dependencies (install with npm install)
+node_modules/
+
+# Benchmark cache
+data/processed/elliptic_cache.npz
+
+# Private notes
+INTERVIEW_PREP.md
