@@ -7,6 +7,10 @@ explains every verdict.
 
 Upload a CSV, see the ring, click an account, read why it was flagged.
 
+**Live demo:** https://frection.onrender.com/detect?demo=1&account=MULE_HUB_CRITICAL_0
+(free hosting: the first load can take up to a minute while the server wakes; the
+hosted version runs without the GNN risk score because of its memory limit)
+
 ![FRECTION dashboard: a mule hub selected, with the evidence for its verdict](docs/screenshot.png)
 
 ## What it does
@@ -221,7 +225,6 @@ Dockerfile           one container: API + built dashboard
   look the same as customers paying a business.
 - **Single process, in memory.** Uploads are capped at 100,000 rows and analysis
   results are lost on restart.
-- **The Docker image has not been test-built** on the development machine.
 
 ## Roadmap
 
@@ -229,7 +232,7 @@ Dockerfile           one container: API + built dashboard
   dataset) so it can learn hubs, then let it inform verdicts
 - Tune GraphSAGE on Elliptic and try out-of-fold embeddings for the hybrid model
 - Learn the rule thresholds from data
-- Hosted demo
+- Host the demo with the GNN risk score enabled
 
 ## Tech stack
 
