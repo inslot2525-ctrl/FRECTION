@@ -38,6 +38,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from api import explain as explainer  # noqa: E402
+from api import gnn as gnn_model  # noqa: E402
 from api.entities import analyze_entities  # noqa: E402
 from api.ingest import (  # noqa: E402
     binary_label, detect_columns, detect_id_column, is_text, normalise_frame, parse_numeric_text, read_upload,
@@ -173,8 +174,9 @@ def _warm_up():
         print(f"Model warm-up finished in {time.time()-t0:.1f}s")
     except Exception as exc:
         _load_error = str(exc)
-        print(f"WARNING: GNN artifacts unavailable ({exc}); structural analysis only.")
+        print(f"Legacy GNN lookup artifacts not found ({exc}).")
     finally:
+        gnn_model.load()          # inductive risk model; optional, independent of the artifacts above
         _load_done.set()
 
 
@@ -212,13 +214,14 @@ app.add_middleware(
 def _model_status() -> str:
     if not _load_done.is_set():
         return "loading"
-    return "unavailable" if _load_error else "ready"
+    return "ready" if gnn_model.available() or not _load_error else "unavailable"
 
 
 @app.get("/health")
 @app.get("/api/health")
 def health_check():
-    return {"status": "Frection API online", "model": _model_status(), "ai_explanations": explainer.ai_available()}
+    return {"status": "Frection API online", "model": _model_status(), "gnn_score": gnn_model.available(),
+            "ai_explanations": explainer.ai_available()}
 
 
 @app.get("/api/stats")
@@ -408,8 +411,14 @@ def _analyze_transactions(df: pd.DataFrame, sender_col, receiver_col, fraud_col,
         hit  = pos >= 0
         groups[hit] = arts["gnn_groups"][pos[hit]]
         engine = "gnn+structural"
-    except Exception as exc:
-        print(f"WARNING: GNN artifacts unavailable ({exc}), using structural analysis only.")
+    except Exception:
+        pass                      # no legacy lookup artifacts: the rules above stand
+
+    # Inductive GraphSAGE: a risk score for every account in THIS upload. It is
+    # shown as supporting evidence and does not change the verdicts above.
+    gnn_risk = gnn_model.score(sc[both_ok], dc[both_ok], None if amounts is None else amounts[both_ok], n_nodes)
+    if gnn_risk is not None and engine == "structural":
+        engine = "structural+gnn-score"
 
     # ------------------------------------------------------------------
     # Metrics & smart graph slicing
@@ -446,7 +455,7 @@ def _analyze_transactions(df: pd.DataFrame, sender_col, receiver_col, fraud_col,
         "fan_in": fan_in, "fan_out": fan_out, "fan_thresh": hub_thresh,
         "pair_s": pair_s, "pair_d": pair_d,
         "base_fraud": base_fraud, "base_mule": base_mule,
-        "struct_fraud": struct_fraud, "struct_mule": struct_mule, "gnn_pos": gnn_pos,
+        "struct_fraud": struct_fraud, "struct_mule": struct_mule, "gnn_pos": gnn_pos, "gnn_risk": gnn_risk,
     }
     return metrics, {"nodes": nodes_list, "links": links_list}, engine, evidence
 
@@ -614,3 +623,24 @@ def account_neighbourhood(analysis_id: str, account: str):
     if result is None:
         raise HTTPException(status_code=404, detail=f"Account '{account}' is not in this dataset.")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Serve the built dashboard (production / Docker). In development Vite serves
+# the frontend on :5173 and proxies /api here, so this block is simply inactive.
+# Registered last so it never shadows an API route.
+# ---------------------------------------------------------------------------
+FRONTEND_DIST = os.path.join(BASE_DIR, "dashboard", "frontend", "dist")
+
+if os.path.isfile(os.path.join(FRONTEND_DIST, "index.html")):
+    from fastapi.responses import FileResponse
+
+    @app.get("/{path:path}", include_in_schema=False)
+    def serve_dashboard(path: str):
+        candidate = os.path.realpath(os.path.join(FRONTEND_DIST, path))
+        inside = candidate.startswith(os.path.realpath(FRONTEND_DIST) + os.sep)
+        if path and inside and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        if path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))   # client-side routes such as /detect

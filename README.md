@@ -7,6 +7,8 @@ explains every verdict.
 
 Upload a CSV, see the ring, click an account, read why it was flagged.
 
+![FRECTION dashboard: a mule hub selected, with the evidence for its verdict](docs/screenshot.png)
+
 ## What it does
 
 - **Reads almost any CSV.** Columns, delimiter and encoding are detected
@@ -20,6 +22,9 @@ Upload a CSV, see the ring, click an account, read why it was flagged.
   to see the evidence behind its label and its counterparties.
 - **Optional AI summary.** With an Anthropic API key, Claude writes a short
   investigator-style summary of that evidence and answers follow-up questions.
+- **Scores every account with a GNN.** An inductive GraphSAGE model, trained
+  without label leakage, runs on the uploaded graph and adds a risk score as
+  supporting evidence.
 - **Fast.** 100,000 transactions are analysed in well under a second.
 
 ## Results
@@ -77,6 +82,34 @@ Full tables, including the local-features-only run:
 [`reports/elliptic_results.md`](reports/elliptic_results.md).
 Reproduce with `python -m src.evaluation.evaluate_elliptic --data-dir <elliptic folder>`.
 
+### Inductive GraphSAGE on PaySim, without label leakage
+
+Task: predict which accounts receive fraud-labelled money, from structure and
+amounts only. PaySim is cut into time windows and each window is a separate
+graph, so the model is tested on graphs it has never seen. Three seeds.
+
+| Window | Base rate | Model | PR-AUC | Precision@100 |
+|---|---|---|---|---|
+| Test (steps 239–306) | 0.11 % | XGBoost, same features, no graph | 0.016 | 0.15 |
+| | | **GraphSAGE (inductive)** | **0.021** | 0.15 |
+| Late (steps 373–743) | 0.53 % | XGBoost, same features, no graph | 0.094 | 0.80 |
+| | | **GraphSAGE (inductive)** | **0.132** | 0.85 |
+
+Here the graph helps: GraphSAGE is 35–40 % ahead of XGBoost on the same
+features. The absolute scores are low, and that is the honest picture. An
+earlier version of this pipeline used per-account fraud counts as features,
+which leaked the label and drove the training loss to almost zero. With the
+leak removed, structure and amounts alone identify few of PaySim's fraud
+receivers.
+
+This is the model the app runs on uploads. Applied unchanged to the synthetic
+ring ledgers, it ranks cash-out accounts in the top 1 % but does not rank
+collection hubs highly, because in PaySim an account with many receipts is
+ordinary. That is why the rules, not the model, decide the verdicts.
+
+Details: [`reports/paysim_inductive.md`](reports/paysim_inductive.md).
+Reproduce with `python -m src.training.train_inductive --paysim <paysim.csv>`.
+
 ## How it works
 
 ```
@@ -86,7 +119,7 @@ CSV upload
 ingest          detect encoding, delimiter and column roles; clean the table
    │
    ├── transactions ──▶ graph rules: collection hubs, feeders, layering
-   │                    (+ lookup in the trained GNN graph, if artifacts exist)
+   │                    + inductive GraphSAGE risk score per account
    │
    └── customer table ─▶ robust scaling → Isolation Forest → k-NN similarity graph
    │
@@ -140,7 +173,14 @@ uvicorn api.main:app --port 8000
 cd dashboard/frontend && npm run dev
 ```
 
-Open http://localhost:5173 and click **Try sample data**.
+Open http://localhost:5173 and click **Try sample data**, or go straight to
+http://localhost:5173/detect?demo=1&account=MULE_HUB_CRITICAL_0.
+
+`requirements.txt` installs everything, including PyTorch for the GNN score,
+training and tests. To run only the app, `requirements-app.txt` is enough; the
+GNN score is then skipped and everything else works.
+
+Run the tests with `pytest`. To deploy, see [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 **Optional AI summaries.** Copy `.env.example` to `.env` and add your
 `ANTHROPIC_API_KEY`. Only the evidence for the account you are viewing is sent,
@@ -154,46 +194,47 @@ api/
   ingest.py          CSV reading, cleaning, column detection
   entities.py        customer-table mode: Isolation Forest + k-NN graph
   explain.py         account investigator and optional AI summary
+  gnn.py             runs the trained GraphSAGE on an uploaded graph
 dashboard/frontend/  React + Vite dashboard
+models/              trained inductive GraphSAGE (45 KB)
 src/
-  preprocessing/     PaySim → graph tensors
-  models/            GraphSAGE encoder and edge decoder
-  training/          training scripts
-  inference/         embedding extraction and earlier experiments
+  features.py        leak-free account features, shared by training and the app
+  models/            GraphSAGE encoder, edge decoder, node risk model
+  training/          train_inductive.py (current), train_gnn.py (edge model)
+  preprocessing/     PaySim → graph tensors for the edge model
   evaluation/        Elliptic benchmark
-tests/               rule benchmark and regression test
+  legacy/            earlier experiments, not used by the app
+tests/               23 tests: ingestion, rules, API, GNN
 reports/             benchmark results
-docs/WALKTHROUGH.md  how each module works and why
+docs/                walkthrough and deployment guide
+Dockerfile           one container: API + built dashboard
 ```
 
 ## Limitations
 
-- **The GNN does not run on uploaded data.** In the app it is a lookup for
-  accounts that were in the training graph. On a new dataset the verdicts come
-  from the rules. The trained artifacts are not included in this repository.
-- **The PaySim training pipeline has label leakage.** Two of the six node
-  features in `src/preprocessing/node_features.py` are per-account fraud counts.
-  Scores from that pipeline should not be trusted until they are removed.
+- **The GNN score does not decide verdicts.** It is trained on PaySim, where
+  fraud receivers take one large transfer, so it does not recognise collection
+  hubs. The rules decide; the score is supporting evidence.
+- **The GNN's absolute accuracy is low** (PR-AUC 0.02–0.13 on PaySim).
 - **The rule scores are on synthetic data** and the thresholds are hand-picked.
 - **Rings with no fraud-actor layer are missed.** Victims paying a hub directly
   look the same as customers paying a business.
 - **Single process, in memory.** Uploads are capped at 100,000 rows and analysis
   results are lost on restart.
-- `src/` still contains earlier experiments (ANN, LSTM, DBSCAN clustering) that
-  the app does not use.
+- **The Docker image has not been test-built** on the development machine.
 
 ## Roadmap
 
-- Remove the leaky features and retrain the PaySim model
-- Run GraphSAGE inductively on uploaded data
+- Train the risk model on data with real ring structure (for example IBM's AML
+  dataset) so it can learn hubs, then let it inform verdicts
 - Tune GraphSAGE on Elliptic and try out-of-fold embeddings for the hybrid model
 - Learn the rule thresholds from data
-- Docker setup and a hosted demo
+- Hosted demo
 
 ## Tech stack
 
 Python · FastAPI · pandas · NumPy · scikit-learn · XGBoost · PyTorch ·
-PyTorch Geometric · React · Vite · Tailwind CSS · react-force-graph · three.js
+PyTorch Geometric · React · Vite · Tailwind CSS · react-force-graph · three.js · Docker
 
 ## License
 

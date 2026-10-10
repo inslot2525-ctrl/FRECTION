@@ -58,8 +58,8 @@ function MetricCard({ title, value, icon, color = 'text-white', loading }) {
 
 function ServerStatus({ status }) {
   const styles = {
-    ready:       { dot: 'bg-emerald-400', text: 'Engine ready',            title: 'GNN model loaded' },
-    unavailable: { dot: 'bg-amber-400',   text: 'Structural mode',         title: 'GNN artifacts not found — using structural graph analysis only' },
+    ready:       { dot: 'bg-emerald-400', text: 'Engine ready',            title: 'Graph rules and GNN risk model loaded' },
+    unavailable: { dot: 'bg-amber-400',   text: 'Rules only',              title: 'GNN risk model not installed — graph rules, records mode and explanations all work' },
     loading:     { dot: 'bg-cyan-400 animate-pulse', text: 'Warming up model…', title: 'The GNN model is loading in the background' },
     offline:     { dot: 'bg-red-500',     text: 'Backend offline',         title: OFFLINE_MSG },
     checking:    { dot: 'bg-gray-500 animate-pulse', text: 'Connecting…', title: '' },
@@ -73,6 +73,12 @@ function ServerStatus({ status }) {
 }
 
 const NONE = '__none__'
+
+const ENGINE_TEXT = {
+  'structural': 'graph rules',
+  'structural+gnn-score': 'graph rules + GNN risk score',
+  'gnn+structural': 'graph rules + GNN lookup',
+}
 
 const MODE_TEXT = {
   transactions: {
@@ -278,6 +284,22 @@ export default function Dashboard() {
     } catch { /* the investigator panel still shows the evidence */ }
   }, [analysisId, graphData])
 
+  // Demo link: /detect?demo=1 loads the sample; &account=<id> also opens that account
+  const demoStarted = useRef(false)
+  const demoAccountOpened = useRef(false)
+  useEffect(() => {
+    if (demoStarted.current || !new URLSearchParams(window.location.search).has('demo')) return
+    demoStarted.current = true
+    trySample()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    const account = new URLSearchParams(window.location.search).get('account')
+    if (!account || !analysisId || !graphData || demoAccountOpened.current) return
+    demoAccountOpened.current = true
+    selectAccount(account)
+  }, [analysisId, graphData, selectAccount])
+
   const mapping = result?.columns
   const meta = result?.meta
   const text = MODE_TEXT[result?.mode] ?? MODE_TEXT.transactions
@@ -417,7 +439,7 @@ export default function Dashboard() {
               </span>
               <span className="inline-flex items-center gap-1.5 border border-white/10 bg-black/30 px-2.5 py-1 rounded-full">
                 <Clock size={12} /> {meta.elapsed_ms < 1000 ? `${meta.elapsed_ms} ms` : `${(meta.elapsed_ms / 1000).toFixed(1)} s`}
-                {' · '}{meta.engine === 'gnn+structural' ? 'GNN + structural' : meta.engine === 'structural' ? 'structural analysis' : 'anomaly detection + similarity graph'}
+                {' · '}{ENGINE_TEXT[meta.engine] ?? 'anomaly detection + similarity graph'}
               </span>
               <span className="inline-flex items-center gap-1.5 text-cyan-300 border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 rounded-full">
                 {text.chip}

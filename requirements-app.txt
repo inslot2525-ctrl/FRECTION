@@ -1,0 +1,9 @@
+# Runtime dependencies for the web app (no PyTorch).
+# The GNN risk score is skipped automatically when torch is not installed.
+numpy
+pandas
+scikit-learn
+fastapi
+uvicorn
+python-multipart
+anthropic

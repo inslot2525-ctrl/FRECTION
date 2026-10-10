@@ -8,7 +8,7 @@ class GraphSAGEEncoder(nn.Module):
     2-Layer GraphSAGE Encoder.
     Aggregates neighborhood features to create 64-dimensional node embeddings.
     """
-    def __init__(self, in_channels=6, hidden_channels=64, out_channels=64, dropout=0.2):
+    def __init__(self, in_channels=4, hidden_channels=64, out_channels=64, dropout=0.2):
         super(GraphSAGEEncoder, self).__init__()
         
         # Layer 1: Aggregates immediate neighbors (1-hop)
@@ -74,7 +74,7 @@ class FraudGNN(nn.Module):
     """
     Unified container wrapping the GraphSAGE Encoder and Edge Decoder.
     """
-    def __init__(self, num_node_features=6, hidden_dim=64, embedding_dim=64):
+    def __init__(self, num_node_features=4, hidden_dim=64, embedding_dim=64):
         super(FraudGNN, self).__init__()
         self.encoder = GraphSAGEEncoder(in_channels=num_node_features, 
                                         hidden_channels=hidden_dim, 
@@ -94,3 +94,22 @@ class FraudGNN(nn.Module):
         # Step 2: Decode the specific edges requested
         logits = self.decoder(z, supervision_edge_index)
         return logits
+
+
+class NodeRiskModel(nn.Module):
+    """
+    GraphSAGE encoder + node-level head: one risk logit per account.
+
+    Inductive: it learns how to aggregate a node's neighbourhood, not an
+    embedding per node, so it can score accounts in a graph it has never seen.
+    """
+    def __init__(self, in_channels, hidden_channels=64, embedding_dim=64, dropout=0.3):
+        super(NodeRiskModel, self).__init__()
+        self.encoder = GraphSAGEEncoder(in_channels=in_channels,
+                                        hidden_channels=hidden_channels,
+                                        out_channels=embedding_dim,
+                                        dropout=dropout)
+        self.head = nn.Sequential(nn.ReLU(), nn.Dropout(dropout), nn.Linear(embedding_dim, 1))
+
+    def forward(self, x, edge_index):
+        return self.head(self.encoder(x, edge_index)).squeeze(-1)

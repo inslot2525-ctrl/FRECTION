@@ -1,8 +1,7 @@
 import pandas as pd
 import torch
-from sklearn.preprocessing import StandardScaler
 from torch.utils.data import TensorDataset, DataLoader
-from src.models.ann_classifier import ANNClassifier
+from src.legacy.models.ann_classifier import ANNClassifier
 
 # Load data
 df = pd.read_csv("data/processed/node_features.csv")
@@ -10,15 +9,7 @@ df = pd.read_csv("data/processed/node_features.csv")
 # TEMP: create dummy labels for pipeline testing
 df["label"] = (df["fraud_ratio"] > 0).astype(int)
 
-X = df.drop(columns=[
-    "account",
-    "label",
-    "fraud_ratio",
-    "fraud_count"
-]).values
-
-scaler = StandardScaler()
-X = scaler.fit_transform(X)
+X = df.drop(columns=["account", "label"]).values
 y = df["label"].values
 
 X = torch.tensor(X, dtype=torch.float32)
@@ -49,6 +40,3 @@ for epoch in range(epochs):
         total_loss += loss.item()
 
     print(f"Epoch {epoch+1}: Loss={total_loss:.4f}")
-    
-torch.save(model.state_dict(), "models_ann.pth")
-print("ANN model saved.")

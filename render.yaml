@@ -1,0 +1,14 @@
+# Render blueprint: New + > Blueprint > pick this repository.
+# The free plan has 512 MB RAM, so this builds without PyTorch (WITH_GNN=0).
+services:
+  - type: web
+    name: frection
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerBuildArgs:
+      WITH_GNN: "0"
+    healthCheckPath: /api/health
+    envVars:
+      - key: ANTHROPIC_API_KEY     # optional: enables AI summaries; set it in the Render dashboard
+        sync: false

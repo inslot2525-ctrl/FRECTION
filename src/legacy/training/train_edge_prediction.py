@@ -24,7 +24,7 @@ import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score
 
 from src.models.graphsage import GraphSAGEEncoder
-from src.models.edge_decoder import MLPDecoder
+from src.legacy.models.edge_decoder import MLPDecoder
 
 # ---------------------------------------------------------------------------
 # Paths

@@ -9,14 +9,17 @@ Features computed per node (all vectorised with torch scatter ops):
   1  in_degree       – number of transactions received
   2  amount_sent     – total amount sent
   3  amount_received – total amount received
-  4  fraud_sent      – number of outgoing fraud transactions
-  5  fraud_received  – number of incoming fraud transactions
+
+No label-derived feature is used. An earlier version also included
+fraud_sent / fraud_received (per-account counts of fraud-labelled
+transactions). The model is trained to predict whether a transaction is fraud,
+so those two features leaked the answer and were removed.
 
 All features are z-score normalised before saving.
 
 Output
 ------
-data/processed/x_node_features.pt  – FloatTensor [N, 6]
+data/processed/x_node_features.pt  – FloatTensor [N, 4]
 """
 
 import json
@@ -54,7 +57,6 @@ def compute_node_features() -> None:
     src     = edge_index[0]       # sender   indices  [E]
     dst     = edge_index[1]       # receiver indices  [E]
     amounts = edge_attr[:, 0]     # transaction amount
-    fraud   = edge_attr[:, 3]     # isFraud flag  (0 or 1)
 
     print(f"Nodes: {num_nodes:,} | Edges: {src.size(0):,}")
 
@@ -63,7 +65,7 @@ def compute_node_features() -> None:
     # ------------------------------------------------------------------
     print("Engineering features...")
 
-    x = torch.zeros((num_nodes, 6), dtype=torch.float32)
+    x = torch.zeros((num_nodes, 4), dtype=torch.float32)
 
     # Degrees
     x[:, 0] = torch.bincount(src, minlength=num_nodes).float()   # out_degree
@@ -72,10 +74,6 @@ def compute_node_features() -> None:
     # Amount totals
     x[:, 2].scatter_add_(0, src, amounts)   # amount_sent
     x[:, 3].scatter_add_(0, dst, amounts)   # amount_received
-
-    # Fraud counts
-    x[:, 4].scatter_add_(0, src, fraud)     # fraud_sent
-    x[:, 5].scatter_add_(0, dst, fraud)     # fraud_received
 
     # ------------------------------------------------------------------
     # Z-score normalisation
@@ -97,8 +95,7 @@ def compute_node_features() -> None:
 
     # Quick sanity check
     print(f"\nFeature stats (post-normalisation):")
-    labels = ["out_degree", "in_degree", "amount_sent", "amount_received",
-              "fraud_sent", "fraud_received"]
+    labels = ["out_degree", "in_degree", "amount_sent", "amount_received"]
     for i, name in enumerate(labels):
         col = x[:, i]
         print(f"  {name:18s}  mean={col.mean():.4f}  std={col.std():.4f}"

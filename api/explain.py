@@ -243,6 +243,11 @@ def _explain_transaction(entry, i, artifacts):
     if ev["has_label"]:
         stats.append({"label": "Fraud-labelled transactions", "value": f"{fraud_out} sent · {fraud_in} received"})
     stats.append({"label": "Linked flagged accounts", "value": f"{len(linked_flagged):,}"})
+    risk = ev.get("gnn_risk")
+    if risk is not None:
+        higher_than = float((risk < risk[i]).mean())
+        stats.append({"label": "GNN risk score (experimental)",
+                      "value": f"{risk[i]:.2f} — higher than {_pct(higher_than)} of accounts"})
 
     counterparties = _counterparties(ev, rows_out, dc, "sent to") + _counterparties(ev, rows_in, sc, "received from")
     counterparties.sort(key=lambda c: (c["group"] == "normal", -c["transactions"]))

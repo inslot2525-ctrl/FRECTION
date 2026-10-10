@@ -100,10 +100,14 @@ The third hub condition is what separates a mule hub from a landlord or a
 business. A landlord also collects from many and pays few, but the tenants spend
 most of their money elsewhere, so they are not feeders.
 
-If the trained GNN artifacts are present, accounts that appear in the training
-graph take their label from there instead: known fraud stays fraud, and an
-account in an embedding cluster where more than 10 % of members are known fraud
-is a mule.
+After the rules, `api/gnn.py` scores every account with the inductive GraphSAGE
+model (see section 5). The score is stored as evidence and shown in the
+investigator. It does not change a verdict.
+
+There is also a legacy path: if artifacts from the old full-PaySim pipeline are
+present in `data/processed`, accounts found in that training graph take their
+label from it. Those artifacts are not in the repository, so this path is
+normally inactive.
 
 **How well the rules do.** `tests/rule_benchmark.py` scores them on synthetic
 ledgers with known ground truth (see `reports/rule_benchmark.md`). On the
@@ -122,8 +126,8 @@ outlets and fraud actors who also spend at shops, precision is 100 % and recall
   money through an intermediary would be mislabelled.
 - The thresholds (0.5 %, 3, 50, "most" = half, 4 hops) are chosen by hand, not
   learned.
-- The GNN is a **lookup of accounts seen in training**. It does not run on
-  newly uploaded accounts. On a new dataset the verdicts come from the rules.
+- The GNN score is supporting evidence only. On a new dataset the verdicts come
+  from the rules.
 - Only the first 600 flagged and 200 normal transactions are drawn.
 
 ### `api/entities.py` — customer-records mode
@@ -199,26 +203,61 @@ Points worth knowing:
 - Uploads use `XMLHttpRequest` rather than `fetch` because `fetch` cannot report
   upload progress.
 
-## 5. Training pipeline (`src/`)
+## 5. The GNN (`src/`, `api/gnn.py`)
 
-| Stage | File | Output |
-|---|---|---|
-| map accounts to integer IDs | `preprocessing/node_mapping.py` | `edge_index.pt`, `edge_attr.pt` |
-| node features | `preprocessing/node_features.py` | `x_node_features.pt` |
-| assemble graph | `preprocessing/build_pyg_graph.py` | `pyg_graph.pt` |
-| model | `models/graphsage.py` | 2-layer GraphSAGE encoder + MLP edge decoder |
-| train | `training/train_gnn.py` | `models_gnn.pth` |
-| embeddings | `inference/extract_gnn_embeddings.py` | `gnn_embeddings.pt` |
+### `src/features.py` — leak-free features
 
-The model predicts whether a **transaction (edge)** is fraud from the embeddings
-of its two accounts. Training uses class-weighted binary cross-entropy and early
-stopping on validation PR-AUC.
+Thirteen features per account, from structure and amounts only: transaction
+counts, distinct counterparties, totals, means and maxima sent and received,
+and three ratios. Amounts are log-scaled and every feature is standardised
+**within the graph it was computed on**, so the model sees "large for this
+dataset" rather than a currency. The same function is used in training and in
+the app, so the two cannot drift apart.
 
-**Known problem — label leakage.** `node_features.py` includes `fraud_sent` and
-`fraud_received`: the number of fraud-labelled transactions per account. The
-model is then asked to predict whether a transaction is fraud. Most PaySim
-accounts appear once, so these features contain the answer. Scores from this
-pipeline cannot be trusted until those two features are removed.
+No label enters a feature. An earlier pipeline used per-account fraud counts as
+features while predicting fraud, which leaked the answer; that is why its
+training loss fell to almost zero.
+
+### `src/training/train_inductive.py` — training and benchmark
+
+- **Task:** predict which accounts receive fraud-labelled money.
+- **Inductive setup:** PaySim is cut into time windows of about a million
+  transactions, and each window is its own graph. The model trains on two early
+  windows, early-stops on a third, and is tested on later windows it has never
+  seen. A freshly uploaded ledger is the same situation.
+- **Model:** `NodeRiskModel` in `src/models/graphsage.py`, a 2-layer GraphSAGE
+  encoder with a linear head. GraphSAGE learns how to aggregate a node's
+  neighbours, not an embedding per node, which is what lets it score new graphs.
+- **Baselines:** XGBoost on exactly the same features, and a one-feature
+  heuristic (largest amount received).
+
+Result: GraphSAGE reaches PR-AUC 0.021 on the test window and 0.132 on the late
+window, against 0.016 and 0.094 for XGBoost. The graph helps by 35–40 %, and the
+absolute numbers are low. See `reports/paysim_inductive.md`.
+
+### `api/gnn.py` — running it on uploads
+
+Loads `models/graphsage_inductive.pt` once at startup, computes the features for
+the uploaded graph and returns a risk score per account. If PyTorch or the model
+file is missing, it returns nothing and the app carries on.
+
+**Limits.**
+
+- What the model learned is PaySim's pattern: a fraud receiver takes one
+  unusually large transfer. It ranks cash-out accounts in the top 1 % of the
+  synthetic ring ledgers but does **not** rank collection hubs highly, because
+  in PaySim an account with many receipts is ordinary.
+- PaySim has no ring structure: every sending account appears exactly once. It
+  is the wrong dataset for learning rings.
+- For those two reasons the score is shown as evidence and does not decide.
+
+### Also in `src/`
+
+- `preprocessing/` and `training/train_gnn.py`: the original pipeline that
+  builds one graph from all of PaySim and trains a transaction-level (edge)
+  classifier. The two leaky features have been removed from
+  `preprocessing/node_features.py`; its artifacts have not been regenerated.
+- `legacy/`: earlier experiments (ANN, LSTM, DBSCAN) that nothing uses.
 
 ## 6. Evaluation
 
@@ -227,7 +266,7 @@ Elliptic Bitcoin dataset against logistic regression, random forest, XGBoost and
 an MLP, using a temporal split (train on time steps 1–29, validate on 30–34,
 test on 35–49), a threshold chosen on validation, and three seeds.
 
-Results: see `reports/elliptic_results.md` (generated by the script).
+Results: random forest 0.79 illicit F1, GraphSAGE 0.57. See `reports/elliptic_results.md`.
 
 ## 7. Running it
 

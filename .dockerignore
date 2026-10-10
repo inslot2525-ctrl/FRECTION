@@ -1,0 +1,10 @@
+.git
+.venv
+**/node_modules
+**/dist
+**/__pycache__
+data
+notebooks
+*.log
+.env
+INTERVIEW_PREP.md

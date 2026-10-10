@@ -186,3 +186,6 @@ data/processed/elliptic_cache.npz
 
 # Private notes
 INTERVIEW_PREP.md
+
+# Trained inductive risk model (small; shipped so the app can score uploads)
+!models/graphsage_inductive.pt

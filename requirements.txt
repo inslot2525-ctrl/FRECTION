@@ -1,16 +1,9 @@
-numpy
-pandas
-matplotlib
-seaborn
-scikit-learn
-networkx
-xgboost
-shap
-jupyter
-fastapi
-uvicorn
-streamlit
+# Everything: the app, the GNN risk score, training, benchmarks and tests.
+-r requirements-app.txt
 torch
-python-multipart
-anthropic
 torch_geometric
+xgboost
+tqdm
+matplotlib
+pytest
+httpx
